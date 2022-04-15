@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "clickhouse.fullname" . }}
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  serviceName: {{ include "clickhouse.name" . }}
+  selector:
+    matchLabels:
+      {{- include "clickhouse.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "clickhouse.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "clickhouse.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.initdb.enabled }}
+      initContainers:
+        - name: initdb-loader
+          image: busybox
+          command: ["wget","--no-check-certificate","{{ .Values.initdb.location }}/{{ .Values.initdb.script }}","-O","/docker-entrypoint-initdb.d/{{ .Values.initdb.script }}"]
+          volumeMounts:
+            - mountPath: /docker-entrypoint-initdb.d
+              name: "{{ include "clickhouse.fullname" . }}-initdb"
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.httpPort | default 8123 }}
+              protocol: TCP
+            - name: client
+              containerPort: {{ .Values.clientPort | default 9000 }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: configd-volume
+              mountPath: /etc/clickhouse-server/config.d
+            {{- if .Values.persistence.enabled }}
+            - name: "{{ include "clickhouse.fullname" . }}-data"
+              mountPath: /var/lib/clickhouse
+            {{- end }}
+            {{- if .Values.initdb.enabled }}
+            - name: "{{ include "clickhouse.fullname" . }}-initdb"
+              mountPath: /docker-entrypoint-initdb.d
+            {{- end }}
+      volumes:
+        - name: configd-volume
+          configMap:
+            name: config.d
+        {{- if .Values.initdb.enabled }}
+        - emptyDir: {}
+          name: "{{ include "clickhouse.fullname" . }}-initdb"
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: "{{ include "clickhouse.fullname" . }}-data"
+    spec:
+{{ toYaml .Values.volumeClaimTemplate | indent 8 }}
+  {{- end }}
